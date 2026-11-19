@@ -25,7 +25,6 @@ jobs:
         run: |
           python3 << 'EOF'
           import urllib.request
-          import urllib.error
           import hashlib
           import json
           import os
@@ -64,11 +63,9 @@ jobs:
                   req.add_header("Authorization", f"Bearer {TOKEN}")
               try:
                   with urllib.request.urlopen(req, timeout=15) as r:
-                      return hashlib.sha256(r.read()).hexdigest(), None
-              except urllib.error.HTTPError as e:
-                  return None, f"HTTP {e.code}"
-              except Exception as e:
-                  return None, str(e)
+                      return hashlib.sha256(r.read()).hexdigest()
+              except Exception:
+                  return None
 
           cache_file = "license-hashes.json"
           old = json.load(open(cache_file)) if os.path.exists(cache_file) else {}
@@ -77,11 +74,11 @@ jobs:
           not_found = []
 
           for repo in REPOS:
-              h, err = fetch_license(repo)
+              h = fetch_license(repo)
               if h is None:
-                  not_found.append(f"{repo} ({err})")
+                  not_found.append(repo)
                   new[repo] = old.get(repo)
-                  print(f"{'MISSING':8} {repo} -> {err}")
+                  print(f"{'MISSING':8} {repo}")
                   continue
 
               new[repo] = h
@@ -94,13 +91,13 @@ jobs:
 
           if changed:
               subject = f"⚠️ License changed: {', '.join(changed)}"
-              links = "\n".join(f"- https://github.com/{r}" for r in changed)
+              links = "\n".join(f"- https://github.com{r}" for r in changed)
               body = f"License changes detected in the following repositories:\n\n{links}"
           else:
               subject = "✅ License Monitor: Test run (no changes)"
               body = f"Check completed successfully. No license changes detected.\nTotal repositories checked: {len(REPOS)}."
               if not_found:
-                  body += f"\n\nCould not find license file for:\n" + "\n".join(f"- {item}" for item in not_found)
+                  body += f"\n\nCould not find license file for: {', '.join(not_found)}"
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"changed={'true' if changed else 'false'}\n")
@@ -120,7 +117,7 @@ jobs:
         if: steps.check.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: ://gmail.com
+          server_address: smtp.gmail.com
           server_port: 465
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }}
