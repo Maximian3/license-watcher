@@ -55,7 +55,7 @@ jobs:
           TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
           def fetch_license(repo):
-              url = f"https://github.com{repo}/license"
+              url = "https://" + "://github.com" + repo + "/license"
               req = urllib.request.Request(url)
               req.add_header("Accept", "application/vnd.github.raw+json")
               req.add_header("User-Agent", "License-Monitor-Action")
