@@ -21,10 +21,10 @@ jobs:
       - name: Check licenses
         id: check
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 << 'EOF'
-          import urllib.request
+          import subprocess
           import hashlib
           import json
           import os
@@ -52,20 +52,17 @@ jobs:
             "n8n-io/n8n",
           ]
 
-          TOKEN = os.environ.get("GITHUB_TOKEN", "")
-
           def fetch_license(repo):
-              url = "https://" + "://github.com" + repo + "/license"
-              req = urllib.request.Request(url)
-              req.add_header("Accept", "application/vnd.github.raw+json")
-              req.add_header("User-Agent", "License-Monitor-Action")
-              if TOKEN:
-                  req.add_header("Authorization", f"Bearer {TOKEN}")
-              try:
-                  with urllib.request.urlopen(req, timeout=15) as r:
-                      return hashlib.sha256(r.read()).hexdigest()
-              except Exception:
-                  return None
+              cmd = [
+                  "gh", "api",
+                  "-H", "Accept: application/vnd.github.raw+json",
+                  f"/repos/{repo}/license"
+              ]
+              res = subprocess.run(cmd, capture_output=True)
+              if res.returncode == 0 and res.stdout:
+                  return hashlib.sha256(res.stdout).hexdigest(), None
+              err = res.stderr.decode("utf-8", errors="ignore").strip().splitlines()
+              return None, (err[-1] if err else "Unknown error")
 
           cache_file = "license-hashes.json"
           old = json.load(open(cache_file)) if os.path.exists(cache_file) else {}
@@ -74,11 +71,11 @@ jobs:
           not_found = []
 
           for repo in REPOS:
-              h = fetch_license(repo)
+              h, err = fetch_license(repo)
               if h is None:
-                  not_found.append(repo)
+                  not_found.append(f"{repo} ({err})")
                   new[repo] = old.get(repo)
-                  print(f"{'MISSING':8} {repo}")
+                  print(f"{'MISSING':8} {repo} -> {err}")
                   continue
 
               new[repo] = h
@@ -91,13 +88,13 @@ jobs:
 
           if changed:
               subject = f"⚠️ License changed: {', '.join(changed)}"
-              links = "\n".join(f"- https://github.com{r}" for r in changed)
+              links = "\n".join("- https://" + "://github.com" + r for r in changed)
               body = f"License changes detected in the following repositories:\n\n{links}"
           else:
               subject = "✅ License Monitor: Test run (no changes)"
               body = f"Check completed successfully. No license changes detected.\nTotal repositories checked: {len(REPOS)}."
               if not_found:
-                  body += f"\n\nCould not find license file for: {', '.join(not_found)}"
+                  body += "\n\nCould not find license file for:\n" + "\n".join(f"- {item}" for item in not_found)
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"changed={'true' if changed else 'false'}\n")
@@ -117,7 +114,7 @@ jobs:
         if: steps.check.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
         uses: dawidd6/action-send-mail@v3
         with:
-          server_address: smtp.gmail.com
+          server_address: ://gmail.com
           server_port: 465
           username: ${{ secrets.MAIL_USERNAME }}
           password: ${{ secrets.MAIL_PASSWORD }}
