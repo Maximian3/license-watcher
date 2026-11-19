@@ -2,8 +2,8 @@ name: License Monitor
 
 on:
   schedule:
-    - cron: '0 9 * * 1'  # каждый понедельник в 9:00 UTC
-  workflow_dispatch:      # запуск вручную
+    - cron: '0 9 * * 1'  # Every Monday at 9:00 UTC
+  workflow_dispatch:      # Manual trigger (sends a test email)
 
 jobs:
   check-licenses:
@@ -20,6 +20,8 @@ jobs:
 
       - name: Check licenses
         id: check
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 << 'EOF'
           import urllib.request
@@ -50,39 +52,59 @@ jobs:
             "n8n-io/n8n",
           ]
 
-          LICENSE_FILES = ["LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"]
+          TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
           def fetch_license(repo):
-              for fname in LICENSE_FILES:
-                  url = f"https://raw.githubusercontent.com/{repo}/main/{fname}"
-                  try:
-                      with urllib.request.urlopen(url, timeout=10) as r:
-                          return hashlib.sha256(r.read()).hexdigest()
-                  except:
-                      pass
-              return None
+              url = f"https://github.com{repo}/license"
+              req = urllib.request.Request(url)
+              req.add_header("Accept", "application/vnd.github.raw+json")
+              req.add_header("User-Agent", "License-Monitor-Action")
+              if TOKEN:
+                  req.add_header("Authorization", f"Bearer {TOKEN}")
+              try:
+                  with urllib.request.urlopen(req, timeout=15) as r:
+                      return hashlib.sha256(r.read()).hexdigest()
+              except Exception:
+                  return None
 
           cache_file = "license-hashes.json"
           old = json.load(open(cache_file)) if os.path.exists(cache_file) else {}
           new = {}
           changed = []
+          not_found = []
 
           for repo in REPOS:
               h = fetch_license(repo)
+              if h is None:
+                  not_found.append(repo)
+                  new[repo] = old.get(repo)
+                  print(f"{'MISSING':8} {repo}")
+                  continue
+
               new[repo] = h
-              if repo in old and old[repo] and h and old[repo] != h:
+              if repo in old and old[repo] and old[repo] != h:
                   changed.append(repo)
               print(f"{'CHANGED' if repo in changed else 'ok':8} {repo}")
 
-          json.dump(new, open(cache_file, "w"), indent=2)
+          with open(cache_file, "w") as f:
+              json.dump(new, f, indent=2)
 
           if changed:
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write(f"changed=true\n")
-                  f.write(f"repos={'|'.join(changed)}\n")
+              subject = f"⚠️ License changed: {', '.join(changed)}"
+              links = "\n".join(f"- https://github.com{r}" for r in changed)
+              body = f"License changes detected in the following repositories:\n\n{links}"
           else:
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write("changed=false\n")
+              subject = "✅ License Monitor: Test run (no changes)"
+              body = f"Check completed successfully. No license changes detected.\nTotal repositories checked: {len(REPOS)}."
+              if not_found:
+                  body += f"\n\nCould not find license file for: {', '.join(not_found)}"
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"changed={'true' if changed else 'false'}\n")
+              f.write(f"subject={subject}\n")
+              f.write("body<<EOF\n")
+              f.write(f"{body}\n")
+              f.write("EOF\n")
           EOF
 
       - name: Save updated cache
@@ -92,7 +114,7 @@ jobs:
           key: license-hashes-${{ github.run_id }}
 
       - name: Send email notification
-        if: steps.check.outputs.changed == 'true'
+        if: steps.check.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.gmail.com
@@ -101,11 +123,5 @@ jobs:
           password: ${{ secrets.MAIL_PASSWORD }}
           to: ${{ secrets.MAIL_TO }}
           from: License Monitor
-          subject: "⚠️ License changed: ${{ steps.check.outputs.repos }}"
-          body: |
-            Обнаружено изменение лицензии в следующих репозиториях:
-
-            ${{ steps.check.outputs.repos }}
-
-            Проверь вручную:
-            ${{ steps.check.outputs.repos }}
+          subject: ${{ steps.check.outputs.subject }}
+          body: ${{ steps.check.outputs.body }}
